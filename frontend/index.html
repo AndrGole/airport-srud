@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Airport SRUD - Access Control System</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .header { background: #1a73e8; color: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        .nav { display: flex; gap: 15px; margin-bottom: 20px; flex-wrap: wrap; }
+        .nav a { background: #e0e0e0; padding: 10px 20px; text-decoration: none; color: #333; border-radius: 5px; cursor: pointer; }
+        .nav a:hover { background: #ccc; }
+        .nav a.active { background: #1a73e8; color: white; }
+        button { background: #1a73e8; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button.danger { background: #dc3545; }
+        button.secondary { background: #6c757d; }
+        button.success { background: #28a745; }
+        input, textarea, select { width: 100%; padding: 10px; margin: 5px 0 15px; border: 1px solid #ddd; border-radius: 5px; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #f5f5f5; }
+        .error { color: red; margin: 10px 0; }
+        .success { color: green; margin: 10px 0; }
+        .info { color: #1a73e8; margin: 10px 0; }
+        .role-badge { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
+        .role-visitor { background: #28a745; color: white; }
+        .role-guard { background: #ffc107; color: black; }
+        .role-admin { background: #dc3545; color: white; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 20px; }
+        .stat-card { background: white; padding: 20px; border-radius: 8px; text-align: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .stat-number { font-size: 32px; font-weight: bold; color: #1a73e8; }
+        .login-box { max-width: 400px; margin: 100px auto; }
+        .granted { color: green; font-weight: bold; }
+        .denied { color: red; font-weight: bold; }
+        .zone-visitor { border-left: 4px solid #28a745; }
+        .zone-guard { border-left: 4px solid #ffc107; }
+        .zone-admin { border-left: 4px solid #dc3545; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script>
+        const API_BASE = "http://localhost:8000/api";
+
+        // ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ==========
+        let currentUser = null;
+        let currentPage = "dashboard";
+
+        // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+        function showError(msg) {
+            const el = document.getElementById("global-error");
+            if (el) {
+                el.innerText = msg;
+                setTimeout(() => el.innerText = "", 5000);
+            }
+            console.error(msg);
+        }
+
+        function showSuccess(msg) {
+            const el = document.getElementById("global-success");
+            if (el) {
+                el.innerText = msg;
+                setTimeout(() => el.innerText = "", 3000);
+            }
+        }
+
+        function getToken() {
+            return localStorage.getItem("token");
+        }
+
+        function setAuth(data) {
+            localStorage.setItem("token", data.access_token);
+            localStorage.setItem("role", data.role);
+            localStorage.setItem("user_id", data.user_id);
+            currentUser = data;
+        }
+
+        function clearAuth() {
+            localStorage.clear();
+            currentUser = null;
+        }
+
+        function isAuthenticated() {
+            return !!getToken();
+        }
+
+        function getUserRole() {
+            return localStorage.getItem("role") || "visitor";
+        }
+
+        // ========== API ВЫЗОВЫ ==========
+        async function apiCall(url, options = {}) {
+            const headers = {
+                "Content-Type": "application/json",
+                ...options.headers
+            };
+            if (getToken()) {
+                headers["Authorization"] = `Bearer ${getToken()}`;
+            }
+            const response = await fetch(`${API_BASE}${url}`, {
+                ...options,
+                headers
+            });
+            if (response.status === 401) {
+                clearAuth();
+                renderApp();
+                return null;
+            }
+            return response;
+        }
+
+        async function login(email, password) {
+            const response = await apiCall("/auth/login", {
+                method: "POST",
+                body: JSON.stringify({ email, password })
+            });
+            if (!response) return false;
+            if (response.ok) {
+                const data = await response.json();
+                setAuth(data);
+                renderApp();
+                return true;
+            } else {
+                const err = await response.text();
+                showError("Login failed: " + err);
+                return false;
+            }
+        }
+
+        async function register(email, password, fullName) {
+            const response = await apiCall("/auth/register", {
+                method: "POST",
+                body: JSON.stringify({ email, password, full_name: fullName })
+            });
+            if (!response) return false;
+            if (response.ok) {
+                const data = await response.json();
+                setAuth(data);
+                renderApp();
+                return true;
+            } else {
+                const err = await response.text();
+                showError("Registration failed: " + err);
+                return false;
+            }
+        }
+
+        async function logout() {
+            clearAuth();
+            renderApp();
+        }
+
+        async function fetchStats() {
+            const response = await apiCall("/stats");
+            if (response && response.ok) return response.json();
+            return {};
+        }
+
+        async function fetchIncidents(statusFilter = "") {
+            const url = statusFilter ? `/incidents?status=${statusFilter}` : "/incidents";
+            const response = await apiCall(url);
+            if (response && response.ok) return response.json();
+            return [];
+        }
+
+        async function createIncident(description, severity) {
+            const response = await apiCall("/incidents", {
+                method: "POST",
+                body: JSON.stringify({ description, severity })
+            });
+            if (response && response.ok) return response.json();
+            return null;
+        }
+
+        async function updateIncidentStatus(id, status) {
+            await apiCall(`/incidents/${id}`, {
+                method: "PUT",
+                body: JSON.stringify({ status })
+            });
+        }
+
+        async function deleteIncident(id) {
+            await apiCall(`/incidents/${id}`, { method: "DELETE" });
+        }
+
+        async function fetchUsers() {
+            const response = await apiCall("/users");
+            if (response && response.ok) return response.json();
+            return [];
+        }
+
+        async function updateUserRole(userId, role) {
+            await apiCall(`/users/${userId}/role?role=${role}`, { method: "PUT" });
+        }
+
+        async function fetchAuditLog() {
+            const response = await apiCall("/audit-log");
+            if (response && response.ok) return response.json();
+            return [];
+        }
+
+        async function fetchMyLogs() {
+            const response = await apiCall("/access-logs/my");
+            if (response && response.ok) return response.json();
+            return [];
+        }
+
+        async function fetchZones() {
+            const response = await apiCall("/zones");
+            if (response && response.ok) return response.json();
+            return [];
+        }
+
+        async function createZone(zoneName, description, requiredRole) {
+            const response = await apiCall("/zones", {
+                method: "POST",
+                body: JSON.stringify({ zone_name: zoneName, description, required_role: requiredRole })
+            });
+            return response && response.ok;
+        }
+
+        async function checkAccess(zoneId, readerLocation) {
+            const response = await apiCall("/access-logs/check", {
+                method: "POST",
+                body: JSON.stringify({ zone_id: parseInt(zoneId), reader_location: readerLocation })
+            });
+            if (response && response.ok) return response.json();
+            return null;
+        }
+
+        // ========== КОМПОНЕНТЫ ==========
+        function renderLoginPage() {
+            return `
+                <div class="card login-box">
+                    <h2>🏢 Airport SRUD</h2>
+                    <p>Access Control System</p>
+                    <div id="login-error" class="error"></div>
+                    <input type="email" id="login-email" placeholder="Email" value="admin@airport.com">
+                    <input type="password" id="login-password" placeholder="Password" value="admin123">
+                    <button onclick="handleLogin()">Login</button>
+                    <button class="secondary" onclick="showRegisterForm()">Register</button>
+                    <hr style="margin: 15px 0;">
+                    <div class="info">
+                        <small>📋 Test accounts:<br>
+                        admin@airport.com / admin123<br>
+                        guard@airport.com / guard123<br>
+                        visitor@airport.com / visitor123</small>
+                    </div>
+                </div>
+                <div id="register-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5);">
+                    <div class="card" style="max-width:400px; margin:100px auto;">
+                        <h3>Register New User</h3>
+                        <div id="reg-error" class="error"></div>
+                        <input type="text" id="reg-fullname" placeholder="Full Name">
+                        <input type="email" id="reg-email" placeholder="Email">
+                        <input type="password" id="reg-password" placeholder="Password">
+                        <button onclick="handleRegister()">Register</button>
+                        <button class="secondary" onclick="hideRegisterForm()">Cancel</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.handleLogin = async () => {
+            const email = document.getElementById("login-email").value;
+            const password = document.getElementById("login-password").value;
+            await login(email, password);
+        };
+
+        window.showRegisterForm = () => {
+            document.getElementById("register-modal").style.display = "block";
+        };
+
+        window.hideRegisterForm = () => {
+            document.getElementById("register-modal").style.display = "none";
+        };
+
+        window.handleRegister = async () => {
+            const fullName = document.getElementById("reg-fullname").value;
+            const email = document.getElementById("reg-email").value;
+            const password = document.getElementById("reg-password").value;
+            await register(email, password, fullName);
+        };
+
+		async function renderDashboard() {
+			const stats = await fetchStats();
+			const role = getUserRole();
+			const roleNames = { visitor: "👤 Visitor (Public)", guard: "🛡️ Guard (Security)", admin: "🔧 System Admin" };
+			
+			let accessDescription = "";
+			if (role === "admin") {
+				accessDescription = `
+					<div class="card" style="background: #e8f0fe;">
+						<h4>🔐 Your Access Rights (Admin)</h4>
+						<ul>
+							<li>✅ Public areas (visitor zones)</li>
+							<li>✅ Admin-only areas (Server Room, Admin Office)</li>
+							<li>❌ Security areas — you CANNOT access guard zones (Security Checkpoint, Baggage Handling, Runway, Control Tower)</li>
+						</ul>
+					</div>
+				`;
+			} else if (role === "guard") {
+				accessDescription = `
+					<div class="card" style="background: #e8f0fe;">
+						<h4>🔐 Your Access Rights (Guard)</h4>
+						<ul>
+							<li>✅ Public areas (visitor zones)</li>
+							<li>✅ Security areas (guard zones)</li>
+							<li>❌ Admin areas — you cannot access server rooms</li>
+						</ul>
+					</div>
+				`;
+			} else {
+				accessDescription = `
+					<div class="card" style="background: #e8f0fe;">
+						<h4>🔐 Your Access Rights (Visitor)</h4>
+						<ul>
+							<li>✅ Public areas only (check-in, departure lounge)</li>
+							<li>❌ Security and Admin areas are restricted</li>
+						</ul>
+					</div>
+				`;
+			}
+			
+			return `
+				<div class="stats">
+					<div class="stat-card"><div class="stat-number">${stats.total_incidents || 0}</div><div>Total Incidents</div></div>
+					<div class="stat-card"><div class="stat-number">${stats.open_incidents || 0}</div><div>Open Incidents</div></div>
+					<div class="stat-card"><div class="stat-number">${stats.total_users || 0}</div><div>Users</div></div>
+					<div class="stat-card"><div class="stat-number">${stats.today_access || 0}</div><div>Today's Access</div></div>
+				</div>
+				<div class="card">
+					<h3>Welcome, ${localStorage.getItem("user_id")}</h3>
+					<p>Role: <span class="role-badge role-${role}">${roleNames[role] || role}</span></p>
+				</div>
+				${accessDescription}
+			`;
+		}
+
+        async function renderIncidents() {
+            const incidents = await fetchIncidents();
+            const role = getUserRole();
+            let tableRows = "";
+            for (const inc of incidents) {
+                tableRows += `
+                    <tr>
+                        <td>${inc.id}</td>
+                        <td>${inc.description}</td>
+                        <td>${inc.severity}</td>
+                        <td>${inc.status}</td>
+                        <td>${new Date(inc.created_at).toLocaleString()}</td>
+                        <td>
+                            ${role === "guard" ? `<select onchange="handleUpdateStatus(${inc.id}, this.value)">
+                                <option ${inc.status === "new" ? "selected" : ""}>new</option>
+                                <option ${inc.status === "in_progress" ? "selected" : ""}>in_progress</option>
+                                <option ${inc.status === "resolved" ? "selected" : ""}>resolved</option>
+                            </select>` : inc.status}
+                            ${role === "admin" ? `<button class="danger" onclick="handleDeleteIncident(${inc.id})">Delete</button>` : ""}
+                        </td>
+                    </tr>
+                `;
+            }
+            if (tableRows === "") tableRows = "<tr><td colspan='6'>No incidents</td></tr>";
+            return `
+                <div class="card">
+                    <h3>📋 Report New Incident</h3>
+                    <textarea id="inc-desc" rows="3" placeholder="Describe the incident..."></textarea>
+                    <select id="inc-severity">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                    <button onclick="handleCreateIncident()">Report Incident</button>
+                </div>
+                <div class="card">
+                    <h3>📌 Incident List</h3>
+                    <table style="width:100%">
+                        <thead><tr><th>ID</th><th>Description</th><th>Severity</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+                        <tbody>${tableRows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        window.handleCreateIncident = async () => {
+            const desc = document.getElementById("inc-desc").value;
+            const severity = document.getElementById("inc-severity").value;
+            if (!desc) {
+                showError("Description required");
+                return;
+            }
+            await createIncident(desc, severity);
+            renderApp();
+        };
+
+        window.handleUpdateStatus = async (id, status) => {
+            await updateIncidentStatus(id, status);
+            renderApp();
+        };
+
+        window.handleDeleteIncident = async (id) => {
+            if (confirm("Delete this incident?")) {
+                await deleteIncident(id);
+                renderApp();
+            }
+        };
+
+        async function renderUsers() {
+            const users = await fetchUsers();
+            const role = getUserRole();
+            if (role !== "admin") return "<div class='card'>Access denied. Admin only.</div>";
+            let rows = "";
+            for (const user of users) {
+                rows += `
+                    <tr>
+                        <td>${user.id}</td>
+                        <td>${user.email}</td>
+                        <td>${user.full_name}</td>
+                        <td>${user.role}</td>
+                        <td>
+                            <select onchange="handleUpdateUserRole(${user.id}, this.value)">
+                                <option ${user.role === "visitor" ? "selected" : ""}>visitor</option>
+                                <option ${user.role === "guard" ? "selected" : ""}>guard</option>
+                                <option ${user.role === "admin" ? "selected" : ""}>admin</option>
+                            </select>
+                        </td>
+                    </tr>
+                `;
+            }
+            return `
+                <div class="card">
+                    <h3>👥 User Management</h3>
+                    <table style="width:100%">
+                        <thead><tr><th>ID</th><th>Email</th><th>Name</th><th>Role</th><th>Change Role</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        window.handleUpdateUserRole = async (userId, role) => {
+            await updateUserRole(userId, role);
+            renderApp();
+        };
+
+        async function renderAuditLog() {
+            const role = getUserRole();
+            if (role !== "admin") return "<div class='card'>Access denied. Admin only.</div>";
+            const logs = await fetchAuditLog();
+            let rows = "";
+            for (const log of logs) {
+                rows += `<tr><td>${log.user_id}</td><td>${log.action}</td><td>${log.details || ""}</td><td>${new Date(log.timestamp).toLocaleString()}</td></tr>`;
+            }
+            if (rows === "") rows = "<tr><td colspan='4'>No audit logs</td></tr>";
+            return `
+                <div class="card">
+                    <h3>📜 Audit Log</h3>
+                    <table style="width:100%">
+                        <thead><tr><th>User ID</th><th>Action</th><th>Details</th><th>Time</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function renderMyLogs() {
+            const logs = await fetchMyLogs();
+            let rows = "";
+            for (const log of logs) {
+                rows += `<tr>
+                    <td>${log.zone_name || "Zone " + log.zone_id}</td>
+                    <td>${log.access_granted ? '<span class="granted">✅ GRANTED</span>' : '<span class="denied">❌ DENIED</span>'}</td>
+                    <td>${log.reader_location || "Unknown"}</td>
+                    <td>${log.reason ? `<small>${log.reason}</small>` : ""}</td>
+                    <td>${new Date(log.timestamp).toLocaleString()}</td>
+                </tr>`;
+            }
+            if (rows === "") rows = "<tr><td colspan='5'>No access logs yet. Try using Check Access!</td></tr>";
+            return `
+                <div class="card">
+                    <h3>📋 My Access History</h3>
+                    <p>All your attempts to pass through security checkpoints.</p>
+                    <table style="width:100%">
+                        <thead><tr><th>Zone</th><th>Result</th><th>Location</th><th>Reason</th><th>Time</th></tr></thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>
+            `;
+        }
+
+        async function renderZones() {
+			const zones = await fetchZones();
+			const role = getUserRole();
+			
+			const roleIcon = { visitor: "👤", guard: "🛡️", admin: "🔧" };
+			const roleNames = { visitor: "Public", guard: "Security Personnel", admin: "Admin Only" };
+			
+			// Новая логика проверки доступа (совпадает с бэкендом)
+			function canAccess(userRole, requiredRole) {
+				if (userRole === "visitor") {
+					return requiredRole === "visitor";
+				}
+				if (userRole === "guard") {
+					return requiredRole === "visitor" || requiredRole === "guard";
+				}
+				if (userRole === "admin") {
+					return requiredRole === "visitor" || requiredRole === "admin";
+				}
+				return false;
+			}
+			
+			let rows = "";
+			for (const zone of zones) {
+				const access = canAccess(role, zone.required_role);
+				rows += `
+					<tr class="zone-${zone.required_role}" style="${!access ? 'opacity: 0.6' : ''}">
+						<td>${zone.id}</td>
+						<td>${zone.zone_name}${!access ? ' 🔒' : ''}</td>
+						<td>${zone.description || ""}</td>
+						<td><span class="role-badge role-${zone.required_role}">${roleNames[zone.required_role]}</span></td>
+						<td>${access ? '✅ You can enter' : '❌ Access denied'}</td>
+					</tr>
+				`;
+			}
+			
+			let createForm = "";
+			if (role === "admin") {
+				createForm = `
+					<div class="card">
+						<h3>➕ Create New Zone (Admin Only)</h3>
+						<input type="text" id="new-zone-name" placeholder="Zone Name (e.g., 'VIP Lounge')">
+						<input type="text" id="new-zone-desc" placeholder="Description">
+						<select id="new-zone-role">
+							<option value="visitor">👤 Public (visitor)</option>
+							<option value="guard">🛡️ Security (guard)</option>
+							<option value="admin">🔧 Admin Only</option>
+						</select>
+						<button onclick="handleCreateZone()">Create Zone</button>
+					</div>
+				`;
+			}
+			
+			// Добавляем пояснение о правилах доступа
+			let accessRules = "";
+			if (role === "admin") {
+				accessRules = `<div class="info" style="background: #e8f0fe; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+					<strong>🔐 Your access rules (Admin):</strong><br>
+					✅ Public areas (visitor)<br>
+					✅ Admin-only areas (admin)<br>
+					❌ Security areas (guard) — you cannot access these
+				</div>`;
+			} else if (role === "guard") {
+				accessRules = `<div class="info" style="background: #e8f0fe; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+					<strong>🔐 Your access rules (Guard):</strong><br>
+					✅ Public areas (visitor)<br>
+					✅ Security areas (guard)<br>
+					❌ Admin areas (admin) — you cannot access these
+				</div>`;
+			} else {
+				accessRules = `<div class="info" style="background: #e8f0fe; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+					<strong>🔐 Your access rules (Visitor):</strong><br>
+					✅ Public areas only
+				</div>`;
+			}
+			
+			return `
+				${createForm}
+				<div class="card">
+					<h3>🗺️ Airport Zones</h3>
+					<p>Your role: <span class="role-badge role-${role}">${roleIcon[role]} ${role}</span></p>
+					${accessRules}
+					<table style="width:100%">
+						<thead>
+							<tr>
+								<th>ID</th>
+								<th>Zone Name</th>
+								<th>Description</th>
+								<th>Required Role</th>
+								<th>Your Access</th>
+							</tr>
+						</thead>
+						<tbody>${rows}</tbody>
+					</table>
+				</div>
+			`;
+		}
+
+        window.handleCreateZone = async () => {
+            const name = document.getElementById("new-zone-name").value;
+            const desc = document.getElementById("new-zone-desc").value;
+            const requiredRole = document.getElementById("new-zone-role").value;
+            if (!name) {
+                showError("Zone name required");
+                return;
+            }
+            const success = await createZone(name, desc, requiredRole);
+            if (success) {
+                showSuccess("Zone created!");
+                renderApp();
+            } else {
+                showError("Failed to create zone");
+            }
+        };
+
+        async function renderCheckAccess() {
+            const zones = await fetchZones();
+            const role = getUserRole();
+            
+            let zoneOptions = '<option value="">Select zone</option>';
+            for (const zone of zones) {
+                zoneOptions += `<option value="${zone.id}">${zone.zone_name} (requires ${zone.required_role})</option>`;
+            }
+            
+            return `
+                <div class="card">
+                    <h3>🚪 Security Checkpoint</h3>
+                    <p>Simulate passing through a gate. The system will check if your role allows access.</p>
+                    <div class="info" style="background: #e8f0fe; padding: 10px; border-radius: 5px; margin-bottom: 15px;">
+                        <strong>Your role:</strong> <span class="role-badge role-${role}">${role}</span>
+                    </div>
+                    <label>📍 Zone:</label>
+                    <select id="access-zone-id">${zoneOptions}</select>
+                    <label>📟 Reader Location:</label>
+                    <input type="text" id="access-location" placeholder="e.g., 'Gate B12', 'Main Entrance', 'Checkpoint 3'" value="Main Gate">
+                    <button class="success" onclick="handleCheckAccess()">▶ Attempt Access</button>
+                    <div id="access-result" style="margin-top: 20px; padding: 15px; border-radius: 5px; display: none;"></div>
+                </div>
+            `;
+        }
+
+        window.handleCheckAccess = async () => {
+            const zoneId = document.getElementById("access-zone-id").value;
+            const location = document.getElementById("access-location").value;
+            if (!zoneId || !location) {
+                showError("Please select zone and enter location");
+                return;
+            }
+            const result = await checkAccess(zoneId, location);
+            const resultDiv = document.getElementById("access-result");
+            resultDiv.style.display = "block";
+            
+            if (result) {
+                if (result.granted) {
+                    resultDiv.innerHTML = `
+                        <div style="background: #d4edda; color: #155724; padding: 15px; border-radius: 5px;">
+                            <strong>✅ ACCESS GRANTED</strong><br>
+                            Zone: ${result.zone}<br>
+                            Your role: ${result.user_role} → Required: ${result.required_role}<br>
+                            You may proceed.
+                        </div>
+                    `;
+                    showSuccess("Access granted!");
+                } else {
+                    resultDiv.innerHTML = `
+                        <div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px;">
+                            <strong>❌ ACCESS DENIED</strong><br>
+                            Zone: ${result.zone}<br>
+                            Your role: ${result.user_role} → Required: ${result.required_role}<br>
+                            ${result.incident_created ? '⚠️ An incident has been automatically created for security review.' : ''}
+                        </div>
+                    `;
+                    showError("Access denied. Incident created.");
+                }
+                // Refresh logs and incidents to reflect changes
+                setTimeout(() => {
+                    if (currentPage === "mylogs") renderApp();
+                    if (currentPage === "incidents") renderApp();
+                }, 1000);
+            } else {
+                resultDiv.innerHTML = `<div style="background: #f8d7da; color: #721c24; padding: 15px; border-radius: 5px;">Failed to check access. Make sure backend is running.</div>`;
+                showError("Failed to check access");
+            }
+        };
+
+        async function renderApp() {
+            const root = document.getElementById("root");
+            if (!isAuthenticated()) {
+                root.innerHTML = renderLoginPage();
+                return;
+            }
+
+            const role = getUserRole();
+            const navItems = [
+                { name: "Dashboard", page: "dashboard", roles: ["visitor", "guard", "admin"] },
+                { name: "Incidents", page: "incidents", roles: ["visitor", "guard", "admin"] },
+                { name: "Check Access", page: "checkaccess", roles: ["visitor", "guard", "admin"] },
+                { name: "My Logs", page: "mylogs", roles: ["visitor", "guard", "admin"] },
+                { name: "Zones", page: "zones", roles: ["visitor", "guard", "admin"] },
+                { name: "Users", page: "users", roles: ["admin"] },
+                { name: "Audit Log", page: "audit", roles: ["admin"] }
+            ];
+
+            let navHtml = `<div class="nav">`;
+            for (const item of navItems) {
+                if (item.roles.includes(role)) {
+                    navHtml += `<a class="${currentPage === item.page ? "active" : ""}" onclick="setPage('${item.page}')">${item.name}</a>`;
+                }
+            }
+            navHtml += `</div>`;
+
+            let contentHtml = "";
+            if (currentPage === "dashboard") contentHtml = await renderDashboard();
+            else if (currentPage === "incidents") contentHtml = await renderIncidents();
+            else if (currentPage === "mylogs") contentHtml = await renderMyLogs();
+            else if (currentPage === "users") contentHtml = await renderUsers();
+            else if (currentPage === "audit") contentHtml = await renderAuditLog();
+            else if (currentPage === "zones") contentHtml = await renderZones();
+            else if (currentPage === "checkaccess") contentHtml = await renderCheckAccess();
+
+            root.innerHTML = `
+                <div class="container">
+                    <div class="header">
+                        <h2>🏢 Airport SRUD System</h2>
+                        <div>
+                            <span style="margin-right:20px">👤 Role: <span class="role-badge role-${role}">${role}</span></span>
+                            <button onclick="logout()">Logout</button>
+                        </div>
+                    </div>
+                    ${navHtml}
+                    <div id="global-error" class="error"></div>
+                    <div id="global-success" class="success"></div>
+                    ${contentHtml}
+                </div>
+            `;
+        }
+
+        window.setPage = (page) => {
+            currentPage = page;
+            renderApp();
+        };
+
+        window.logout = logout;
+
+        // Запуск
+        renderApp();
+    </script>
+</body>
+</html>
