@@ -22,8 +22,8 @@
         table { width: 100%; border-collapse: collapse; }
         th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
         th { background: #f5f5f5; }
-        .error { color: red; margin: 10px 0; }
-        .success { color: green; margin: 10px 0; }
+        .error { color: red; margin: 10px 0; padding: 10px; background-color: #ffe0e0; border-radius: 5px; border: 1px solid red; }
+        .success { color: green; margin: 10px 0; padding: 10px; background-color: #e0ffe0; border-radius: 5px; border: 1px solid green; }
         .info { color: #1a73e8; margin: 10px 0; }
         .role-badge { display: inline-block; padding: 3px 8px; border-radius: 3px; font-size: 12px; }
         .role-visitor { background: #28a745; color: white; }
@@ -44,7 +44,7 @@
     <div id="root"></div>
 
     <script>
-        const API_BASE = "/api";
+        const API_BASE = "http://localhost:8000/api";
 
         // ========== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ==========
         let currentUser = null;
@@ -52,21 +52,65 @@
 
         // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
         function showError(msg) {
-            const el = document.getElementById("global-error");
-            if (el) {
-                el.innerText = msg;
-                setTimeout(() => el.innerText = "", 5000);
-            }
-            console.error(msg);
-        }
+			console.log("showError:", msg);
+			
+			let el = document.getElementById("login-error");
+			
+			if (el) {
+				el.innerText = msg;
+				el.style.display = "block";
+				setTimeout(() => {
+					el.style.display = "none";
+					el.innerText = "";
+				}, 5000);
+			} else {
+				alert("Error: " + msg);
+			}
+		}
+
+		function showRegisterError(msg) {
+			let el = document.getElementById("register-error");
+			if (!el) {
+				el = document.createElement("div");
+				el.id = "register-error";
+				el.className = "error";
+				const modal = document.getElementById("register-modal");
+				if (modal) {
+					const modalCard = modal.querySelector(".card");
+					if (modalCard) {
+						modalCard.insertBefore(el, modalCard.firstChild);
+					}
+				}
+			}
+			el.innerText = msg;
+			el.style.display = "block";
+			setTimeout(() => {
+				el.style.display = "none";
+				el.innerText = "";
+			}, 5000);
+		}
 
         function showSuccess(msg) {
-            const el = document.getElementById("global-success");
-            if (el) {
-                el.innerText = msg;
-                setTimeout(() => el.innerText = "", 3000);
-            }
-        }
+			let el = document.getElementById("register-success");
+			if (!el) {
+				el = document.createElement("div");
+				el.id = "register-success";
+				el.className = "success";
+				const modal = document.getElementById("register-modal");
+				if (modal) {
+					const modalCard = modal.querySelector(".card");
+					if (modalCard) {
+						modalCard.insertBefore(el, modalCard.firstChild);
+					}
+				}
+			}
+			el.innerText = msg;
+			el.style.display = "block";
+			setTimeout(() => {
+				el.style.display = "none";
+				el.innerText = "";
+			}, 3000);
+		}
 
         function getToken() {
             return localStorage.getItem("token");
@@ -76,6 +120,7 @@
             localStorage.setItem("token", data.access_token);
             localStorage.setItem("role", data.role);
             localStorage.setItem("user_id", data.user_id);
+			localStorage.setItem("full_name", data.full_name);
             currentUser = data;
         }
 
@@ -107,47 +152,69 @@
             });
             if (response.status === 401) {
                 clearAuth();
-                renderApp();
-                return null;
+                // renderApp();
             }
             return response;
         }
 
         async function login(email, password) {
-            const response = await apiCall("/auth/login", {
-                method: "POST",
-                body: JSON.stringify({ email, password })
-            });
-            if (!response) return false;
-            if (response.ok) {
-                const data = await response.json();
-                setAuth(data);
-                renderApp();
-                return true;
-            } else {
-                const err = await response.text();
-                showError("Login failed: " + err);
-                return false;
-            }
-        }
+			try {
+				const response = await apiCall("/auth/login", {
+					method: "POST",
+					body: JSON.stringify({ email, password })
+				});
+				
+				if (response.ok) {
+					const data = await response.json();
+					setAuth(data);
+					renderApp();
+					return true;
+				} else {
+					let errorMsg = "Login failed";
+					try {
+						const errorData = await response.json();
+						errorMsg = errorData.detail || errorData.message || errorMsg;
+					} catch (e) {
+						errorMsg = `Error ${response.status}: ${response.statusText}`;
+					}
+					showError(errorMsg);
+					return false;
+				}
+			} catch (error) {
+				console.error("Login error:", error);
+				showError("Network error: Could not connect to server");
+				return false;
+			}
+		}
 
         async function register(email, password, fullName) {
-            const response = await apiCall("/auth/register", {
-                method: "POST",
-                body: JSON.stringify({ email, password, full_name: fullName })
-            });
-            if (!response) return false;
-            if (response.ok) {
-                const data = await response.json();
-                setAuth(data);
-                renderApp();
-                return true;
-            } else {
-                const err = await response.text();
-                showError("Registration failed: " + err);
-                return false;
-            }
-        }
+			try {
+				const response = await fetch(`${API_BASE}/auth/register`, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ email, password, full_name: fullName })
+				});
+				
+				if (response.ok) {
+					const data = await response.json();
+					localStorage.setItem("token", data.access_token);
+					localStorage.setItem("role", data.role);
+					localStorage.setItem("user_id", data.user_id);
+					localStorage.setItem("full_name", data.full_name);
+					return { success: true, data };
+				} else {
+					let errorMsg = "Registration failed";
+					try {
+						const err = await response.json();
+						errorMsg = err.detail || errorMsg;
+					} catch(e) {}
+					return { success: false, error: errorMsg };
+				}
+			} catch (error) {
+				console.error("Registration error:", error);
+				return { success: false, error: "Network error: Cannot connect to server" };
+			}
+		}
 
         async function logout() {
             clearAuth();
@@ -236,13 +303,12 @@
         function renderLoginPage() {
             return `
                 <div class="card login-box">
-                    <h2>🏢 Airport SRUD</h2>
-                    <p>Access Control System</p>
-                    <div id="login-error" class="error"></div>
-                    <input type="email" id="login-email" placeholder="Email" value="admin@airport.com">
-                    <input type="password" id="login-password" placeholder="Password" value="admin123">
-                    <button onclick="handleLogin()">Login</button>
-                    <button class="secondary" onclick="showRegisterForm()">Register</button>
+					<h2>🏢 Airport SRUD</h2>
+					<div id="login-error" class="error" style="display: none;"></div>
+					<input type="email" id="login-email" placeholder="Email" value="admin@airport.com">
+					<input type="password" id="login-password" placeholder="Password" value="admin123">
+					<button type="button" onclick="handleLogin()">Login</button>
+					<button type="button" class="secondary" onclick="showRegisterForm()">Register</button>
                     <hr style="margin: 15px 0;">
                     <div class="info">
                         <small>📋 Test accounts:<br>
@@ -254,10 +320,14 @@
                 <div id="register-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5);">
                     <div class="card" style="max-width:400px; margin:100px auto;">
                         <h3>Register New User</h3>
-                        <div id="reg-error" class="error"></div>
+                        <div id="register-error" class="error" style="display: none;"></div>
+						<div id="register-success" class="success" style="display: none;"></div>
                         <input type="text" id="reg-fullname" placeholder="Full Name">
                         <input type="email" id="reg-email" placeholder="Email">
                         <input type="password" id="reg-password" placeholder="Password">
+						<small style="color: #666; display: block; margin-top: -10px; margin-bottom: 10px;">
+							Password must be at least 6 characters and contain at least one digit
+						</small>
                         <button onclick="handleRegister()">Register</button>
                         <button class="secondary" onclick="hideRegisterForm()">Cancel</button>
                     </div>
@@ -265,11 +335,27 @@
             `;
         }
 
-        window.handleLogin = async () => {
-            const email = document.getElementById("login-email").value;
-            const password = document.getElementById("login-password").value;
-            await login(email, password);
-        };
+		window.handleLogin = async () => {
+			const email = document.getElementById("login-email").value;
+			const password = document.getElementById("login-password").value;
+			
+			const btn = document.querySelector("#login-form button") || document.querySelector("button[onclick='handleLogin()']");
+			const originalText = btn.innerText;
+			btn.innerText = "Logging in...";
+			btn.disabled = true;
+			
+			try {
+				const success = await login(email, password);
+				if (!success) {
+					btn.innerText = originalText;
+					btn.disabled = false;
+				}
+			} catch (err) {
+				showError("Network error. Please try again.");
+				btn.innerText = originalText;
+				btn.disabled = false;
+			}
+		};
 
         window.showRegisterForm = () => {
             document.getElementById("register-modal").style.display = "block";
@@ -280,11 +366,57 @@
         };
 
         window.handleRegister = async () => {
-            const fullName = document.getElementById("reg-fullname").value;
-            const email = document.getElementById("reg-email").value;
-            const password = document.getElementById("reg-password").value;
-            await register(email, password, fullName);
-        };
+			const fullName = document.getElementById("reg-fullname").value;
+			const email = document.getElementById("reg-email").value;
+			const password = document.getElementById("reg-password").value;
+			
+			const errorDiv = document.getElementById("register-error");
+			if (errorDiv) errorDiv.style.display = "none";
+			
+			if (!fullName || !email || !password) {
+				showRegisterError("All fields are required");
+				return;
+			}
+			
+			if (password.length < 6) {
+				showRegisterError("Password must be at least 6 characters long");
+				return;
+			}
+			
+			if (!/\d/.test(password)) {
+				showRegisterError("Password must contain at least one digit (0-9)");
+				return;
+			}
+			
+			if (!email.includes("@") || !email.includes(".")) {
+				showRegisterError("Please enter a valid email address");
+				return;
+			}
+			
+			const btn = document.querySelector("#register-modal button[onclick='handleRegister()']");
+			const originalText = btn ? btn.innerText : "Register";
+			if (btn) {
+				btn.innerText = "Registering...";
+				btn.disabled = true;
+			}
+			
+			const result = await register(email, password, fullName);
+			
+			if (btn) {
+				btn.innerText = originalText;
+				btn.disabled = false;
+			}
+			
+			if (result.success) {
+				showSuccess("Registration successful! Redirecting...");
+				setTimeout(() => {
+					document.getElementById("register-modal").style.display = "none";
+					renderApp();
+				}, 1500);
+			} else {
+				showRegisterError(result.error);
+			}
+		};
 
 		async function renderDashboard() {
 			const stats = await fetchStats();
@@ -326,6 +458,8 @@
 				`;
 			}
 			
+			const fullName = localStorage.getItem("full_name") || "User";
+			
 			return `
 				<div class="stats">
 					<div class="stat-card"><div class="stat-number">${stats.total_incidents || 0}</div><div>Total Incidents</div></div>
@@ -334,7 +468,7 @@
 					<div class="stat-card"><div class="stat-number">${stats.today_access || 0}</div><div>Today's Access</div></div>
 				</div>
 				<div class="card">
-					<h3>Welcome, ${localStorage.getItem("user_id")}</h3>
+					<h3>Welcome, ${fullName}</h3>
 					<p>Role: <span class="role-badge role-${role}">${roleNames[role] || role}</span></p>
 				</div>
 				${accessDescription}
@@ -722,8 +856,8 @@
                         </div>
                     </div>
                     ${navHtml}
-                    <div id="global-error" class="error"></div>
-                    <div id="global-success" class="success"></div>
+                    <div id="global-error" class="error" style="display: none;"></div>
+                    <div id="global-success" class="success" style="display: none;"></div>
                     ${contentHtml}
                 </div>
             `;
