@@ -10,6 +10,11 @@ jobs:
   test:
     runs-on: ubuntu-latest
     
+    env:
+      SECRET_KEY: "test-secret-key-for-ci-only"
+      ALGORITHM: "HS256"
+      ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+    
     steps:
     - name: Checkout code
       uses: actions/checkout@v3
@@ -23,7 +28,7 @@ jobs:
       run: |
         cd backend
         pip install -r requirements.txt
-        pip install pytest httpx
+        pip install pytest httpx python-dotenv
     
     - name: Run tests
       run: |
